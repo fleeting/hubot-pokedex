@@ -2,7 +2,7 @@
 #   A wild Hubot appears. Hubot uses Pokédex.
 #
 # Configuration:
-#   None
+#   LIST_OF_ENV_VARS_TO_SET
 #
 # Commands:
 #   pokedex help - A quick list of the commands available.
@@ -16,13 +16,12 @@
 #   James Fleeting <hello@jamesfleeting.com>
 
 getPokemon = (robot, pokemon, cb) ->
-  # API End Point -> http://pokeapi.co/docsv2/#pokemon
   robot.http("http://pokeapi.co/api/v2/pokemon/" + pokemon + "/").header('Content-Type', 'application/json').get() (err, res, body) ->
     if err
       robot.send "Encountered an error :( #{err}"
       return
 
-    robot.logger.debug body
+    robot.logger.debug "/pokemon/#{pokemon}/ - #{body}"
     pokemon = JSON.parse body
 
     getPokemonSpecies robot, pokemon.id, (pokemon_species) ->
@@ -30,14 +29,12 @@ getPokemon = (robot, pokemon, cb) ->
       cb pokemon
 
 getPokemonSpecies = (robot, pokemon_id, cb) ->
-  # API End Point -> http://pokeapi.co/docsv2/#pokemon-species
-  # The /pokemon/ API endpoint doesn't contain the actual pokedex entry. Instead this is found in /pokemon-species/, so I had to do a second query. Species provides some other data that I might use in the future so the second query isn't a big deal for now.
   robot.http("http://pokeapi.co/api/v2/pokemon-species/" + pokemon_id + "/").header('Content-Type', 'application/json').get() (err, res, body) ->
     if err
       robot.send "Encountered an error :( #{err}"
       return
 
-    robot.logger.debug body
+    robot.logger.debug "/pokemon-species/#{pokemon_id}/ - #{body}"
     pokemon_species = JSON.parse body
 
     cb pokemon_species
@@ -70,13 +67,22 @@ module.exports = (robot) ->
   robot.hear /pokedex (.*) (.*)/i, (msg) ->
     action = msg.match[1].toLowerCase()
     query = msg.match[2].toLowerCase()
+    pokemon = {}
     robot.logger.debug "Action is #{action} with a query of #{query}. The full message was #{msg}."
 
     if action == 'select'
       # Get data about a Pokémon from the Pokédex.
       msg.send "Give me a second to query the Pokédex."
 
-      getPokemon robot, query, (pokemon) ->
+      pokedex_storage = robot.brain.data.pokedex ||= {
+        pokemon: {}
+      }
+
+      if typeof pokedex_storage.pokemon[query] != "undefined" && typeof query != "number"
+        robot.logger.debug "Pokemon is being pulled from the cache."
+        pokemon = pokedex_storage.pokemon[query]
+
+        # TODO: Need to DRY this up (see else for second set). Should use promises for the API calls as they need to be in a specific order.
         pokemon_type = ""
         pokemon.types.forEach (item, index, array) ->
           if index != 0
@@ -96,6 +102,49 @@ module.exports = (robot) ->
         pokedex_entry = pokemon.species.flavor_text_entries[1].flavor_text.replace(/\r?\n|\r/g, ' ')
 
         msg.send "You've found #{pokemon.name}, a #{pokemon_type} type Pokémon. #{pokedex_entry} #{pokemon_stats}."
+      else
+        # Generate a random Pokemon ID.
+        # TODO: This works but needs to be reworked with promises as it needs to complete before getPokemon().
+        # if query == 'random'
+        #   robot.http("http://pokeapi.co/api/v2/pokemon-species/?limit=0").header('Content-Type', 'application/json').get() (err, res, body) ->
+        #     if err
+        #       # Hardcode a count if this fails.
+        #       pokemon_count = 721
+        #     else
+        #       robot.logger.debug "/pokemon-species/?limit=0 - #{body}"
+        #       pokemon_count = JSON.parse body
+        #       pokemon_count = pokemon_count.count
+        #
+        #     query = Math.floor(Math.random() * (pokemon_count - 1 + 1)) + 1
+        #     robot.logger.debug "Query has been updated for random with the ID of #{query}."
+
+        robot.logger.debug "Pokemon is being pulled from the API."
+        getPokemon robot, query, (result) ->
+          # Cache Pokemon in brain by name.
+          # TODO: Update to only cache the data I need vs the entire result, so much we don't need.
+          pokemon = result
+          pokedex_storage.pokemon[pokemon.name] = pokemon
+          robot.brain.save()
+
+          pokemon_type = ""
+          pokemon.types.forEach (item, index, array) ->
+            if index != 0
+              pokemon_type += ", "
+
+            pokemon_type += item.type.name
+            return
+
+          pokemon_stats = "The base stats are "
+          pokemon.stats.forEach (item, index, array) ->
+            if index != 0
+              pokemon_stats += ", "
+
+            pokemon_stats += "#{item.stat.name} #{item.base_stat}"
+            return
+
+          pokedex_entry = pokemon.species.flavor_text_entries[1].flavor_text.replace(/\r?\n|\r/g, ' ')
+
+          msg.send "You've found #{pokemon.name}, a #{pokemon_type} type Pokémon. #{pokedex_entry} #{pokemon_stats}."
     else
       msg.send "That isn't a valid Pokedéx command. For help try 'pokedex help'."
 
@@ -107,3 +156,64 @@ module.exports = (robot) ->
 
   robot.hear /pokemon battle (.*)/i, (res) ->
     res.send "Pokémon battles are coming soon. Until then check out the Pokédex!"
+
+    # Fleshing out initial storage of battle data and structure. All work in progress.
+    #
+    # @battle_storage = robot.brain.data.battles ||= { }
+    #
+    # user = res.message.user.name.toLowerCase()
+    # battles = @battle_storage[user] ||= {
+    #   stats: {
+    #     wins: 0
+    #     loses: 0
+    #     streak: 0
+    #     incomplete: 0
+    #   }
+    #   current: {}
+    #   history: {}
+    # }
+    #
+    # battles.history[] = {
+    #   self: {
+    #     pokemon: {
+    #       name: ''
+    #       level: ''
+    #       stats: ''
+    #       moves: {}
+    #       abilities: {}
+    #       item: ''
+    #     }
+    #   }
+    #   trainer: {
+    #     name: ''
+    #     pokemon: {
+    #       name: ''
+    #       level: ''
+    #       stats: ''
+    #       moves: {}
+    #       abilities: {}
+    #       items: ''
+    #     }
+    #   }
+    #   turns: {
+    #     one: {
+    #       person: '' # Who is taking the turn
+    #       action: '' # Attack || Use
+    #       move: '' # If action === attack
+    #       item: '' # If action === use
+    #       damage: '' # if move does damage
+    #       heal: '' # if item heals
+    #     }
+    #   }
+    #   winner: ''
+    #   loser: ''
+    #   location: '' # Randomly generated location from a game.
+    #   next_turn: '' # When a battle isn't over for who goes next.
+    #   completed: '' # True if a battle was ended naturally.
+    #   started: ''
+    #   ended: ''
+    # }
+    #
+    # battles.wins = 2
+    # battles.loses = 4
+    # robot.brain.save()
