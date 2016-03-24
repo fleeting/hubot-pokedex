@@ -15,31 +15,31 @@
 # Author:
 #   James Fleeting <hello@jamesfleeting.com>
 
-getPokemon = (robot, pokemon, cb) ->
-  robot.http("http://pokeapi.co/api/v2/pokemon/" + pokemon + "/").header('Content-Type', 'application/json').get() (err, res, body) ->
-    if err
-      robot.send "Encountered an error :( #{err}"
-      return
-
-    robot.logger.debug "/pokemon/#{pokemon}/ - #{body}"
-    pokemon = JSON.parse body
-
-    getPokemonSpecies robot, pokemon.id, (pokemon_species) ->
-      pokemon.species = pokemon_species
-      cb pokemon
-
-getPokemonSpecies = (robot, pokemon_id, cb) ->
-  robot.http("http://pokeapi.co/api/v2/pokemon-species/" + pokemon_id + "/").header('Content-Type', 'application/json').get() (err, res, body) ->
-    if err
-      robot.send "Encountered an error :( #{err}"
-      return
-
-    robot.logger.debug "/pokemon-species/#{pokemon_id}/ - #{body}"
-    pokemon_species = JSON.parse body
-
-    cb pokemon_species
-
 module.exports = (robot) ->
+  getPokemon = (pokemon, cb) ->
+    robot.http("http://pokeapi.co/api/v2/pokemon/" + pokemon + "/").header('Content-Type', 'application/json').get() (err, res, body) ->
+      if err
+        robot.send "Encountered an error :( #{err}"
+        return
+
+      robot.logger.debug "/pokemon/#{pokemon}/ - #{body}"
+      pokemon = JSON.parse body
+
+      getPokemonSpecies pokemon.id, (pokemon_species) ->
+        pokemon.species = pokemon_species
+        cb pokemon
+
+  getPokemonSpecies = (pokemon_id, cb) ->
+    robot.http("http://pokeapi.co/api/v2/pokemon-species/" + pokemon_id + "/").header('Content-Type', 'application/json').get() (err, res, body) ->
+      if err
+        robot.send "Encountered an error :( #{err}"
+        return
+
+      robot.logger.debug "/pokemon-species/#{pokemon_id}/ - #{body}"
+      pokemon_species = JSON.parse body
+
+      cb pokemon_species
+
   robot.hear /^pokemon ?$/im, (res) ->
     res.reply "I wanna be the very best\n
     Like no one ever was\n
@@ -82,7 +82,7 @@ module.exports = (robot) ->
         robot.logger.debug "Pokemon is being pulled from the cache."
         pokemon = pokedex_storage.pokemon[query]
 
-        # TODO: Need to DRY this up (see else for second set). Should use promises for the API calls as they need to be in a specific order.
+        # TODO: Need to DRY this up (see else for second set).
         pokemon_type = ""
         pokemon.types.forEach (item, index, array) ->
           if index != 0
@@ -99,29 +99,38 @@ module.exports = (robot) ->
           pokemon_stats += "#{item.stat.name} #{item.base_stat}"
           return
 
+        pokemon_abilities = "Abilities include "
+        pokemon.abilities.forEach (item, index, array) ->
+          if index != 0
+            pokemon_abilities += ", "
+
+          if item.ability.is_hidden
+            hidden_ability = " (hidden)"
+          else
+            hidden_ability = ""
+
+          pokemon_abilities += "#{item.ability.name}#{hidden_ability}"
+          return
+
+        if pokemon.species.evolves_from_species
+          evolves_from = "It evolves from #{pokemon.species.evolves_from_species.name}."
+        else
+          evolves_from = "It does not evolve from another Pokemon."
+
         pokedex_entry = pokemon.species.flavor_text_entries[1].flavor_text.replace(/\r?\n|\r/g, ' ')
 
-        msg.send "You've found #{pokemon.name}, a #{pokemon_type} type Pokémon. #{pokedex_entry} #{pokemon_stats}."
+        msg.send "You've found #{pokemon.name}; a #{pokemon_type} type Pokémon. #{pokedex_entry} #{pokemon_stats}. #{pokemon_abilities}. #{evolves_from}"
       else
         # Generate a random Pokemon ID.
-        # TODO: This works but needs to be reworked with promises as it needs to complete before getPokemon().
-        # if query == 'random'
-        #   robot.http("http://pokeapi.co/api/v2/pokemon-species/?limit=0").header('Content-Type', 'application/json').get() (err, res, body) ->
-        #     if err
-        #       # Hardcode a count if this fails.
-        #       pokemon_count = 721
-        #     else
-        #       robot.logger.debug "/pokemon-species/?limit=0 - #{body}"
-        #       pokemon_count = JSON.parse body
-        #       pokemon_count = pokemon_count.count
-        #
-        #     query = Math.floor(Math.random() * (pokemon_count - 1 + 1)) + 1
-        #     robot.logger.debug "Query has been updated for random with the ID of #{query}."
+        if query == 'random'
+          # Hardcoded the total number of Pokemon for now. I can get this info from the API if I want with http://pokeapi.co/api/v2/pokemon-species/?limit=0.
+          query = Math.floor(Math.random() * (721 - 1 + 1)) + 1
+          robot.logger.debug "Query has been updated for random with the ID of #{query}."
 
         robot.logger.debug "Pokemon is being pulled from the API."
-        getPokemon robot, query, (result) ->
-          # Cache Pokemon in brain by name.
-          # TODO: Update to only cache the data I need vs the entire result, so much we don't need.
+        getPokemon query, (result) ->
+          # Cache Pokemon in redis by name.
+          # TODO: See if there is any data I don't need to store so the cache doesn't have everything.
           pokemon = result
           pokedex_storage.pokemon[pokemon.name] = pokemon
           robot.brain.save()
@@ -142,9 +151,27 @@ module.exports = (robot) ->
             pokemon_stats += "#{item.stat.name} #{item.base_stat}"
             return
 
+          pokemon_abilities = "Abilities include "
+          pokemon.abilities.forEach (item, index, array) ->
+            if index != 0
+              pokemon_abilities += ", "
+
+            if item.ability.is_hidden
+              hidden_ability = " (hidden)"
+            else
+              hidden_ability = ""
+
+            pokemon_abilities += "#{item.ability.name}#{hidden_ability}"
+            return
+
+          if pokemon.species.evolves_from_species
+            evolves_from = "It evolves from #{pokemon.species.evolves_from_species.name}."
+          else
+            evolves_from = "It does not evolve from another Pokemon."
+
           pokedex_entry = pokemon.species.flavor_text_entries[1].flavor_text.replace(/\r?\n|\r/g, ' ')
 
-          msg.send "You've found #{pokemon.name}, a #{pokemon_type} type Pokémon. #{pokedex_entry} #{pokemon_stats}."
+          msg.send "You've found #{pokemon.name}; a #{pokemon_type} type Pokémon. #{pokedex_entry} #{pokemon_stats}. #{pokemon_abilities}. #{evolves_from}"
     else
       msg.send "That isn't a valid Pokedéx command. For help try 'pokedex help'."
 
